@@ -3,7 +3,7 @@ import requests
 from datetime import datetime
 
 st.set_page_config(page_title="URL 摘要 → TXT", page_icon="📝")
-st.title("📝 丟網址 → 摘要條列（n8n + OpenAI）")
+st.title("📝 丟網址 → 摘要條列")
 
 N8N_WEBHOOK_URL = "https://uricorn99.app.n8n.cloud/webhook/summarize-to-txt"
 
@@ -76,7 +76,7 @@ if run_btn:
         height=320
     )
 
-    # （可選）下載 TXT
+    # 下載 TXT
     st.download_button(
         "⬇️ 下載 TXT",
         data=raw_text,
