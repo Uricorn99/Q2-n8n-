@@ -1,0 +1,211 @@
+{
+  "name": "URL -> Extract -> LLM Bullet Points -> TXT (HTTP OpenAI)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "summarize-to-txt",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "4488e745-e018-41f9-9e9a-d1182f59f20a",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        400,
+        112
+      ],
+      "webhookId": "429cf0af-f6db-471e-afc0-ab3d1525d339"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "url",
+              "value": "={{ $json.body.url }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b90725de-02bd-41af-b675-2da1233cce26",
+      "name": "Set URL",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        624,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "b774cc87-7511-489b-8bd0-b4ca8421e9a1",
+      "name": "Fetch HTML",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        848,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function strip(html) {\n  return html\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, ' ')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, ' ')\n    .replace(/<!--([\\s\\S]*?)-->/g, ' ')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\n// 取得 Fetch HTML 的輸出\nconst input = $input.first().json;\n\n// 真正的 HTML 字串通常在 body\nconst rawHtml = input.body ?? input.data ?? '';\n\n// 防呆（避免空值再爆一次）\nif (typeof rawHtml !== 'string' || rawHtml.length === 0) {\n  throw new Error('No HTML content found in HTTP response');\n}\n\nconst text = strip(rawHtml);\n\n// 避免丟太多字給 LLM\nconst MAX_CHARS = 10000;\nconst clipped = text.slice(0, MAX_CHARS);\n\nreturn [{\n  json: {\n    url: $('Set URL').first().json.url,\n    extractedText: clipped,\n    extractedCharCount: clipped.length\n  }\n}];\n"
+      },
+      "id": "9bed3de5-092a-4c00-ab0c-4a0a2a836eee",
+      "name": "Extract Main Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1072,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.OPENAI_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-4o-mini\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"你是內容整理助手，請將文章整理成條列重點。\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"請將以下內容整理成 8~12 點條列重點，每點以 - 開頭：\\n\\n{{ $json.extractedText }}\"\n    }\n  ],\n  \"temperature\": 0.3\n}\n",
+        "options": {}
+      },
+      "id": "2dae3bfc-699e-4828-8567-f9b1dd253c5d",
+      "name": "Call OpenAI (HTTP)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1296,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const url = $('Set URL').first().json.url;\nconst output = $input.first().json;\n\nlet bullets = '';\n\n// Case 1: 新版 Responses API\nif (Array.isArray(output?.data)) {\n  for (const item of output.data) {\n    if (Array.isArray(item.content)) {\n      for (const c of item.content) {\n        if (typeof c.text === 'string') {\n          bullets += c.text;\n        }\n      }\n    }\n  }\n}\n\n// Case 2: 舊 Chat Completions\nif (!bullets && output?.choices?.[0]?.message?.content) {\n  bullets = output.choices[0].message.content;\n}\n\n// Case 3: n8n 簡化欄位\nif (!bullets && typeof output.text === 'string') {\n  bullets = output.text;\n}\n\n// 最後防呆（不 stringify，不爆）\nif (!bullets) {\n  throw new Error('OpenAI returned no text content');\n}\n\nconst content =\n`URL: ${url}\nGeneratedAt: ${new Date().toISOString()}\n\n${bullets.trim()}\n`;\n\nreturn [{\n  json: {\n    url,\n    bullets: bullets.trim(),\n    txt: content,\n    filename: `summary_${Date.now()}.txt`\n  }\n}];\n"
+      },
+      "id": "a7886c64-0090-4626-b474-ebe2953a1b95",
+      "name": "Format TXT",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "=={{ $json.txt }}",
+        "options": {}
+      },
+      "id": "c1f11409-fa5a-4b3b-bf17-38c60c3d547e",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        112
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set URL": {
+      "main": [
+        [
+          {
+            "node": "Fetch HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch HTML": {
+      "main": [
+        [
+          {
+            "node": "Extract Main Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Main Text": {
+      "main": [
+        [
+          {
+            "node": "Call OpenAI (HTTP)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call OpenAI (HTTP)": {
+      "main": [
+        [
+          {
+            "node": "Format TXT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format TXT": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "39dc97b8-6328-403f-a7c6-110f90f46eed",
+  "meta": {
+    "instanceId": "63f9eac11550e14db664209fe23fe57a504f693bce35599f772c622ad80fea73"
+  },
+  "id": "i8QchDyGDYt5N5rR",
+  "tags": []
+}
